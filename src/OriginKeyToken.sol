@@ -88,8 +88,8 @@ pragma solidity 0.8.20;
  *                  - sum(payoutsOf)
  *
  *  Every function maintains this equation. The sell function is the most
- *  critical — it must use signedSub with taxed included in payout, and
- *  must distribute the fee AFTER updating payoutsOf. This is PITcoin exact.
+ *  critical — it must release only the dividend baseline for burned tokens,
+ *  distribute the fee after updating payoutsOf, and pay net cbBTC directly.
  *
  *  payoutsOf is int256 — it CAN and WILL go negative. This is correct.
  *  DO NOT change to uint256. DO NOT change signedSub to signedAdd in sell.
@@ -108,6 +108,7 @@ pragma solidity 0.8.20;
  */
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
@@ -131,6 +132,7 @@ contract OriginKeyToken is ReentrancyGuard {
     uint256 public constant SELL_FEE = 7;
     uint256 public constant INSCRIBE_FEE = 7;
     uint256 public constant MIN_SATS = 100;
+    uint256 public constant MIN_SELL = 100;
     uint256 public constant MAX_BUY = 1_000_000; // 0.01 BTC per transaction
 
     // ─── Dividend accumulator — PITcoin exact ────────────────────────────────
@@ -176,6 +178,7 @@ contract OriginKeyToken is ReentrancyGuard {
     // ─── Constructor ──────────────────────────────────────────────────────────
     constructor(address _cbbtc) {
         require(_cbbtc != address(0), "cbBTC: zero address");
+        require(IERC20Metadata(_cbbtc).decimals() == 8, "cbBTC: expected 8 decimals");
         CBBTC = IERC20(_cbbtc);
         vaultRegistrar = msg.sender;
         ordinalOracle = msg.sender;
@@ -251,16 +254,17 @@ contract OriginKeyToken is ReentrancyGuard {
     // When selling `tokens` for `taxed` cbBTC:
     //   - totalSupply decreases by tokens
     //   - cbbtcInContract decreases by taxed
-    //   - To maintain the equation, payoutsOf must decrease by:
-    //     taxed + (tokens * profitPerToken) / MAGNITUDE
-    //   - signedSub DECREASES payoutsOf (makes it more negative)
+    //   - Direct cbBTC payment handles `taxed`
+    //   - payoutsOf must decrease only by the burned-token dividend baseline:
+    //     (tokens * profitPerToken) / MAGNITUDE
+    //   - Including `taxed` in payoutsOf would double-count seller proceeds
     //   - _distributeFee happens AFTER payoutsOf update
     //
     // DO NOT change signedSub to signedAdd — that breaks dividend distribution
     // for any wallet that sells and rebuys. PITcoin uses signedSub. Always.
     //
     function sell(uint256 tokens, uint256 minCbbtc) external nonReentrant {
-        require(tokens > 0, "Zero tokens");
+        require(tokens >= MIN_SELL, "Minimum 100 sats to sell");
         require(balanceOf[msg.sender] >= tokens, "Insufficient balance");
         require(totalSupply > tokens, "Cannot sell entire supply");
 
@@ -293,6 +297,7 @@ contract OriginKeyToken is ReentrancyGuard {
     // ─── Transfer — zero fee ──────────────────────────────────────────────────
     function transfer(address to, uint256 tokens) external returns (bool) {
         require(to != address(0), "Zero address");
+        require(tokens > 0, "Zero tokens");
         require(balanceOf[msg.sender] >= tokens, "Insufficient balance");
 
         _checkVaultSweep(msg.sender, tokens);
@@ -377,6 +382,8 @@ contract OriginKeyToken is ReentrancyGuard {
         vaultHasOrdinal[vault] = (ordinalNumber > 0);
 
         if (ordinalNumber > 0) {
+            require(ordinalVaultAddress[ordinalNumber] == address(0), "Ordinal: already registered");
+            require(!ordinalHasBeenMoved[ordinalNumber], "Ordinal: already moved");
             vaultOrdinal[vault] = ordinalNumber;
             ordinalVaultAddress[ordinalNumber] = vault;
         }
