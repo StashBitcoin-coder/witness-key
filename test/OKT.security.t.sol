@@ -61,8 +61,6 @@ contract OKTSecurityTest is Test {
         vm.prank(alice);
         okt.buy(1_000_000, 0);
 
-        uint256 contractBalBefore = cbbtc.balanceOf(address(okt));
-
         // Bob does 100 buy/sell/withdraw cycles
         for (uint256 i = 0; i < 100; i++) {
             vm.prank(bob);
@@ -149,8 +147,6 @@ contract OKTSecurityTest is Test {
         vm.prank(alice);
         okt.buy(100_000, 0);
 
-        uint256 contractBefore = cbbtc.balanceOf(address(okt));
-
         // 200 minimum buys from different senders
         for (uint256 i = 0; i < 200; i++) {
             vm.prank(bob);
@@ -170,12 +166,12 @@ contract OKTSecurityTest is Test {
         vm.prank(bob);
         okt.buy(100_000, 0);
 
-        // Bob sells 1 token at a time, 100 times
+        // Bob sells the minimum sell amount repeatedly.
         for (uint256 i = 0; i < 100; i++) {
             uint256 bobBal = okt.balanceOf(bob);
-            if (bobBal > 1 && okt.totalSupply() > 1) {
+            if (bobBal >= 100 && okt.totalSupply() > 100) {
                 vm.prank(bob);
-                okt.sell(1, 0);
+                okt.sell(100, 0);
             }
         }
 
@@ -385,8 +381,16 @@ contract OKTSecurityTest is Test {
         vm.prank(alice);
         okt.buy(10_000, 0);
         vm.prank(alice);
-        vm.expectRevert("Zero tokens");
+        vm.expectRevert("Minimum 100 sats to sell");
         okt.sell(0, 0);
+    }
+
+    function test_sellBelowMinimumReverts() public {
+        vm.prank(alice);
+        okt.buy(10_000, 0);
+        vm.prank(alice);
+        vm.expectRevert("Minimum 100 sats to sell");
+        okt.sell(99, 0);
     }
 
     function test_sellMoreThanBalanceReverts() public {
@@ -403,6 +407,17 @@ contract OKTSecurityTest is Test {
         vm.prank(alice);
         vm.expectRevert("Zero address");
         okt.transfer(address(0), 100);
+    }
+
+    function test_zeroTransferRevertsAndDoesNotSweepVault() public {
+        okt.inscribe(vault1, bytes32("TEST-001"), 50_000, 0);
+
+        vm.prank(vault1);
+        vm.expectRevert("Zero tokens");
+        okt.transfer(alice, 0);
+
+        (, bool swept,,) = okt.vaultStatus(vault1);
+        assertFalse(swept, "Zero transfer must not mark vault swept");
     }
 
     function test_withdrawWithNoDivsReverts() public {
@@ -434,6 +449,20 @@ contract OKTSecurityTest is Test {
         assertTrue(hasOrd);
         assertFalse(moved);
         assertEq(movedAt, 0);
+    }
+
+    function test_duplicateOrdinalRegistrationReverts() public {
+        okt.inscribe(vault1, bytes32("ART-001"), 50_000, 92588651);
+
+        vm.expectRevert("Ordinal: already registered");
+        okt.inscribe(vault2, bytes32("ART-002"), 50_000, 92588651);
+    }
+
+    function test_alreadyMovedOrdinalRegistrationReverts() public {
+        okt.reportOrdinalMoved(92588651);
+
+        vm.expectRevert("Ordinal: already moved");
+        okt.inscribe(vault1, bytes32("ART-001"), 50_000, 92588651);
     }
 
     function test_ordinalMovedTriggersVaultSwept() public {
@@ -481,7 +510,7 @@ contract OKTSecurityTest is Test {
         assertEq(assetId, bytes32("ART-001"));
     }
 
-    function test_unregisteredVaultReturnsEmpty() public {
+    function test_unregisteredVaultReturnsEmpty() public view {
         (bool registered, bool swept, uint256 balance, bytes32 assetId) = okt.vaultStatus(address(0xDEAD));
         assertFalse(registered);
         assertFalse(swept);

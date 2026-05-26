@@ -17,6 +17,14 @@ contract MockCbBTC is ERC20 {
     }
 }
 
+contract MockBadDecimals is ERC20 {
+    constructor() ERC20("Bad BTC", "BADBTC") {}
+
+    function decimals() public pure override returns (uint8) {
+        return 18;
+    }
+}
+
 // Malicious contract that tries reentrancy
 contract ReentrancyAttacker {
     OriginKeyToken public okt;
@@ -87,8 +95,6 @@ contract OKTAuditTest is Test {
         vm.prank(bob);
         okt.buy(100_000, 0);
 
-        // Attacker tries to reenter — ReentrancyGuard should block
-        uint256 contractBefore = cbbtc.balanceOf(address(okt));
         // The reentrancy attempt happens inside withdraw via fallback
         // ReentrancyGuard prevents double withdrawal
         uint256 contractAfter = cbbtc.balanceOf(address(okt));
@@ -314,23 +320,24 @@ contract OKTAuditTest is Test {
     // IMMUTABILITY — verify no admin functions exist
     // ═══════════════════════════════════════════════════════════════════════════
 
-    function test_registrarCannotChangeAfterDeploy() public {
+    function test_registrarCannotChangeAfterDeploy() public view {
         address reg = okt.vaultRegistrar();
         assertEq(reg, address(this), "Registrar should be deployer");
         // No function exists to change registrar — this is verified by the
         // contract not having a setRegistrar() function
     }
 
-    function test_oracleCannotChangeAfterDeploy() public {
+    function test_oracleCannotChangeAfterDeploy() public view {
         address oracle = okt.ordinalOracle();
         assertEq(oracle, address(this), "Oracle should be deployer");
         // No function exists to change oracle — immutable by design
     }
 
-    function test_feeCannotBeChanged() public {
+    function test_feeCannotBeChanged() public view {
         assertEq(okt.BUY_FEE(), 7);
         assertEq(okt.SELL_FEE(), 7);
         assertEq(okt.INSCRIBE_FEE(), 7);
+        assertEq(okt.MIN_SELL(), 100);
         // Constants — cannot be changed after deploy
     }
 
@@ -369,7 +376,18 @@ contract OKTAuditTest is Test {
         okt.inscribe(vault1, bytes32("TEST"), 99, 0);
     }
 
-    function test_sellOneToken() public {
+    function test_sellBelowMinimumReverts() public {
+        vm.prank(alice);
+        okt.buy(10_000, 0);
+        vm.prank(bob);
+        okt.buy(10_000, 0);
+
+        vm.prank(bob);
+        vm.expectRevert("Minimum 100 sats to sell");
+        okt.sell(99, 0);
+    }
+
+    function test_sellMinimumChargesFee() public {
         vm.prank(alice);
         okt.buy(10_000, 0);
         vm.prank(bob);
@@ -377,12 +395,28 @@ contract OKTAuditTest is Test {
 
         uint256 bobBefore = cbbtc.balanceOf(bob);
         vm.prank(bob);
-        okt.sell(1, 0);
+        okt.sell(100, 0);
         uint256 bobAfter = cbbtc.balanceOf(bob);
 
-        // Selling 1 token: fee = 0 (rounds down), so seller gets 1 sat
-        // But 7% of 1 = 0.07 which rounds to 0, so taxed = 1
-        assertGe(bobAfter, bobBefore, "Selling 1 token should return at least 0 sats");
+        assertEq(bobAfter - bobBefore, 93, "Minimum sell should charge 7 sats");
+    }
+
+    function test_constructorRejectsNonEightDecimalReserve() public {
+        MockBadDecimals badToken = new MockBadDecimals();
+
+        vm.expectRevert("cbBTC: expected 8 decimals");
+        new OriginKeyToken(address(badToken));
+    }
+
+    function test_erc20AllowanceFunctionsAreNotImplemented() public {
+        (bool approveOk,) = address(okt).call(abi.encodeWithSignature("approve(address,uint256)", alice, 1));
+        (bool allowanceOk,) = address(okt).staticcall(abi.encodeWithSignature("allowance(address,address)", alice, bob));
+        (bool transferFromOk,) =
+            address(okt).call(abi.encodeWithSignature("transferFrom(address,address,uint256)", alice, bob, 1));
+
+        assertFalse(approveOk, "approve should not be exposed");
+        assertFalse(allowanceOk, "allowance should not be exposed");
+        assertFalse(transferFromOk, "transferFrom should not be exposed");
     }
 
     function test_multipleVaultsEarnProportionally() public {

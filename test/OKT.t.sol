@@ -150,8 +150,6 @@ contract OKTTest is Test {
         okt.buy(SATS, 0);
 
         uint256 bobCbbtcBefore = cbbtc.balanceOf(bob);
-        uint256 bobTokens = okt.balanceOf(bob);
-
         // Bob sells
         vm.prank(bob);
         okt.sell(1000, 0);
@@ -216,9 +214,9 @@ contract OKTTest is Test {
         emit log_named_uint("Contract cbBTC", contractBal);
         emit log_named_uint("Bob dividends", okt.dividendsOf(bob));
 
-        // Try to sell 1 token
+        // Try to sell the enforced minimum
         vm.prank(bob);
-        okt.sell(1, 0);
+        okt.sell(100, 0);
 
         emit log_named_uint("Contract cbBTC after sell", cbbtc.balanceOf(address(okt)));
         emit log_named_uint("Bob dividends after sell", okt.dividendsOf(bob));
