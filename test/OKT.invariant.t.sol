@@ -48,7 +48,7 @@ contract OKTHandler is Test {
         if (cbbtc.balanceOf(actor) < amount) return;
 
         vm.prank(actor);
-        try okt.buy(amount, 0) {} catch {}
+        try okt.buy(amount) {} catch {}
     }
 
     // ─── Sell ─────────────────────────────────────────────────────────────────
@@ -63,7 +63,7 @@ contract OKTHandler is Test {
         if (okt.totalSupply() <= amount) return;
 
         vm.prank(actor);
-        try okt.sell(amount, 0) {} catch {}
+        try okt.sell(amount) {} catch {}
     }
 
     // ─── Withdraw ─────────────────────────────────────────────────────────────
@@ -130,7 +130,7 @@ contract OKTInvariantTest is Test {
         // Seed the contract with a first buy so totalSupply > 0
         address first = handler.actors(0);
         vm.prank(first);
-        okt.buy(10_000, 0);
+        okt.buy(10_000);
 
         // Tell Foundry to only call handler functions
         targetContract(address(handler));

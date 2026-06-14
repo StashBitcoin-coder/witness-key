@@ -46,27 +46,27 @@ contract OKTTest is Test {
 
     function test_firstBuyGetsFullAmount() public {
         vm.prank(alice);
-        okt.buy(SATS, 0);
+        okt.buy(SATS);
         assertEq(okt.balanceOf(alice), SATS); // first buyer gets fee back
     }
 
     function test_secondBuyPays7PercentFee() public {
-        vm.prank(alice); okt.buy(SATS, 0);
-        vm.prank(bob);   okt.buy(SATS, 0);
+        vm.prank(alice); okt.buy(SATS);
+        vm.prank(bob);   okt.buy(SATS);
         assertEq(okt.balanceOf(bob), SATS * 93 / 100);
     }
 
     // ─── Dividend tests ───────────────────────────────────────────────────────
 
     function test_dividendsAccumulateAfterBuy() public {
-        vm.prank(alice); okt.buy(SATS, 0);
-        vm.prank(bob);   okt.buy(SATS, 0);
+        vm.prank(alice); okt.buy(SATS);
+        vm.prank(bob);   okt.buy(SATS);
         assertGt(okt.dividendsOf(alice), 0);
     }
 
     function test_withdrawGivesCorrectAmount() public {
-        vm.prank(alice); okt.buy(SATS, 0);
-        vm.prank(bob);   okt.buy(SATS, 0);
+        vm.prank(alice); okt.buy(SATS);
+        vm.prank(bob);   okt.buy(SATS);
         uint256 divs = okt.dividendsOf(alice);
         uint256 balBefore = cbbtc.balanceOf(alice);
         vm.prank(alice); okt.withdraw();
@@ -76,30 +76,30 @@ contract OKTTest is Test {
     // ─── Sell tests ───────────────────────────────────────────────────────────
 
     function test_sellSendsCbbtcDirectly() public {
-        vm.prank(alice); okt.buy(SATS, 0);
-        vm.prank(bob);   okt.buy(SATS, 0);
+        vm.prank(alice); okt.buy(SATS);
+        vm.prank(bob);   okt.buy(SATS);
         uint256 balBefore = cbbtc.balanceOf(bob);
         uint256 bobTokens = okt.balanceOf(bob);
-        vm.prank(bob);   okt.sell(bobTokens - 1, 0);
+        vm.prank(bob);   okt.sell(bobTokens - 1);
         uint256 balAfter = cbbtc.balanceOf(bob);
         // Bob should receive 93% of tokens sold directly in cbBTC
         assertGt(balAfter, balBefore);
     }
 
     function test_sellAndRebuyStillEarnsDividends() public {
-        vm.prank(alice); okt.buy(SATS, 0);
-        vm.prank(bob);   okt.buy(SATS, 0);
-        vm.prank(bob);   okt.sell(1000, 0); // sell fixed amount
-        vm.prank(bob);   okt.buy(SATS, 0);
-        vm.prank(carol); okt.buy(SATS, 0);
+        vm.prank(alice); okt.buy(SATS);
+        vm.prank(bob);   okt.buy(SATS);
+        vm.prank(bob);   okt.sell(1000); // sell fixed amount
+        vm.prank(bob);   okt.buy(SATS);
+        vm.prank(carol); okt.buy(SATS);
         assertGt(okt.dividendsOf(bob), 0);
     }
 
     function test_sellEverythingDividendsRemain() public {
-        vm.prank(alice); okt.buy(SATS, 0);
-        vm.prank(bob);   okt.buy(SATS, 0);
+        vm.prank(alice); okt.buy(SATS);
+        vm.prank(bob);   okt.buy(SATS);
         uint256 divsBefore = okt.dividendsOf(alice);
-        vm.prank(alice); okt.sell(1000, 0);
+        vm.prank(alice); okt.sell(1000);
         uint256 divsAfter = okt.dividendsOf(alice);
         assertGe(divsAfter, divsBefore);
     }
@@ -107,8 +107,8 @@ contract OKTTest is Test {
     // ─── Reinvest test ────────────────────────────────────────────────────────
 
     function test_reinvestMintsTokens() public {
-        vm.prank(alice); okt.buy(SATS, 0);
-        vm.prank(bob);   okt.buy(SATS, 0);
+        vm.prank(alice); okt.buy(SATS);
+        vm.prank(bob);   okt.buy(SATS);
         uint256 balBefore = okt.balanceOf(alice);
         vm.prank(alice); okt.reinvest();
         assertGt(okt.balanceOf(alice), balBefore);
@@ -116,14 +116,14 @@ contract OKTTest is Test {
 
     // ─── Double-spend protection test ───────────────────────────────────────
     function test_noDoubleSpendOnSell() public {
-        vm.prank(alice); okt.buy(SATS, 0);
-        vm.prank(bob);   okt.buy(SATS, 0);
+        vm.prank(alice); okt.buy(SATS);
+        vm.prank(bob);   okt.buy(SATS);
 
         uint256 bobCbbtcBefore = cbbtc.balanceOf(bob);
         uint256 bobTokens = okt.balanceOf(bob);
 
         // Bob sells
-        vm.prank(bob); okt.sell(1000, 0);
+        vm.prank(bob); okt.sell(1000);
 
         uint256 bobCbbtcAfterSell = cbbtc.balanceOf(bob);
         uint256 bobDivsAfterSell  = okt.dividendsOf(bob);
@@ -139,8 +139,8 @@ contract OKTTest is Test {
 
     // ─── Reinvest dust loop prevention ──────────────────────────────────────
     function test_reinvestMinimum100Sats() public {
-        vm.prank(alice); okt.buy(SATS, 0);
-        vm.prank(bob);   okt.buy(SATS, 0);
+        vm.prank(alice); okt.buy(SATS);
+        vm.prank(bob);   okt.buy(SATS);
         // Alice has dividends from Bob's buy but likely < 100 sats
         uint256 divs = okt.dividendsOf(alice);
         if (divs < 100) {
@@ -151,8 +151,8 @@ contract OKTTest is Test {
     }
 
     function test_reinvestDustLoopBlocked() public {
-        vm.prank(alice); okt.buy(SATS, 0);
-        vm.prank(bob);   okt.buy(200, 0); // small buy generates tiny dividend
+        vm.prank(alice); okt.buy(SATS);
+        vm.prank(bob);   okt.buy(200); // small buy generates tiny dividend
         uint256 divs = okt.dividendsOf(alice);
         if (divs < 100) {
             // Cannot reinvest dust — loop is blocked
@@ -166,9 +166,9 @@ contract OKTTest is Test {
 
     function test_minimalSell() public {
         // Alice buys first - gets 10000 (first buyer)
-        vm.prank(alice); okt.buy(SATS, 0);
+        vm.prank(alice); okt.buy(SATS);
         // Bob buys - gets 9300
-        vm.prank(bob);   okt.buy(SATS, 0);
+        vm.prank(bob);   okt.buy(SATS);
         
         // Check balances before sell
         uint256 bobBalance  = okt.balanceOf(bob);
@@ -181,7 +181,7 @@ contract OKTTest is Test {
         
         // Sell minimum 100 tokens
         vm.prank(bob);
-        okt.sell(100, 0);
+        okt.sell(100);
         
         emit log_named_uint("Contract cbBTC after sell", cbbtc.balanceOf(address(okt)));
         emit log_named_uint("Bob dividends after sell", okt.dividendsOf(bob));
@@ -191,9 +191,9 @@ contract OKTTest is Test {
     // cbBTC in contract must always cover all claimable dividends
 
     function test_solvency_after_buys() public {
-        vm.prank(alice); okt.buy(SATS, 0);
-        vm.prank(bob);   okt.buy(SATS, 0);
-        vm.prank(carol); okt.buy(SATS, 0);
+        vm.prank(alice); okt.buy(SATS);
+        vm.prank(bob);   okt.buy(SATS);
+        vm.prank(carol); okt.buy(SATS);
 
         uint256 contractBalance = cbbtc.balanceOf(address(okt));
         uint256 totalOwed = okt.dividendsOf(alice)
@@ -204,10 +204,10 @@ contract OKTTest is Test {
     }
 
     function test_solvency_after_sell() public {
-        vm.prank(alice); okt.buy(SATS, 0);
-        vm.prank(bob);   okt.buy(SATS, 0);
-        vm.prank(carol); okt.buy(SATS, 0);
-        vm.prank(bob);   okt.sell(1000, 0); // sell fixed amount
+        vm.prank(alice); okt.buy(SATS);
+        vm.prank(bob);   okt.buy(SATS);
+        vm.prank(carol); okt.buy(SATS);
+        vm.prank(bob);   okt.sell(1000); // sell fixed amount
 
         uint256 contractBalance = cbbtc.balanceOf(address(okt));
         uint256 aliceDivs = okt.dividendsOf(alice);
@@ -226,10 +226,10 @@ contract OKTTest is Test {
     }
 
     function test_solvency_after_withdraw() public {
-        vm.prank(alice); okt.buy(SATS, 0);
-        vm.prank(bob);   okt.buy(SATS, 0);
-        vm.prank(carol); okt.buy(SATS, 0);
-        vm.prank(bob);   okt.sell(1000, 0); // sell fixed amount
+        vm.prank(alice); okt.buy(SATS);
+        vm.prank(bob);   okt.buy(SATS);
+        vm.prank(carol); okt.buy(SATS);
+        vm.prank(bob);   okt.sell(1000); // sell fixed amount
         vm.prank(alice); okt.withdraw();
 
         uint256 contractBalance = cbbtc.balanceOf(address(okt));
@@ -241,10 +241,10 @@ contract OKTTest is Test {
     }
 
     function test_solvency_after_reinvest() public {
-        vm.prank(alice); okt.buy(SATS, 0);
-        vm.prank(bob);   okt.buy(SATS, 0);
-        vm.prank(carol); okt.buy(SATS, 0);
-        vm.prank(bob);   okt.sell(1000, 0); // sell fixed amount
+        vm.prank(alice); okt.buy(SATS);
+        vm.prank(bob);   okt.buy(SATS);
+        vm.prank(carol); okt.buy(SATS);
+        vm.prank(bob);   okt.sell(1000); // sell fixed amount
         vm.prank(alice); okt.reinvest();
 
         uint256 contractBalance = cbbtc.balanceOf(address(okt));

@@ -48,16 +48,16 @@ contract OKTSecurityTest is Test {
 
     function test_dividendDrift_100Cycles() public {
         // Seed the contract
-        vm.prank(alice); okt.buy(1_000_000, 0);
+        vm.prank(alice); okt.buy(1_000_000);
 
         uint256 contractBalBefore = cbbtc.balanceOf(address(okt));
 
         // Bob does 100 buy/sell/withdraw cycles
         for (uint i = 0; i < 100; i++) {
-            vm.prank(bob); okt.buy(10_000, 0);
+            vm.prank(bob); okt.buy(10_000);
             uint256 bobBal = okt.balanceOf(bob);
             if (bobBal > 1) {
-                vm.prank(bob); okt.sell(bobBal - 1, 0);
+                vm.prank(bob); okt.sell(bobBal - 1);
             }
             uint256 bobDivs = okt.dividendsOf(bob);
             if (bobDivs > 0) {
@@ -73,18 +73,18 @@ contract OKTSecurityTest is Test {
 
     function test_dividendDrift_multipleActors() public {
         // Three actors trading simultaneously
-        vm.prank(alice); okt.buy(500_000, 0);
-        vm.prank(bob);   okt.buy(500_000, 0);
-        vm.prank(carol); okt.buy(500_000, 0);
+        vm.prank(alice); okt.buy(500_000);
+        vm.prank(bob);   okt.buy(500_000);
+        vm.prank(carol); okt.buy(500_000);
 
         for (uint i = 0; i < 50; i++) {
             // Each actor buys, sells, withdraws in rotation
-            vm.prank(alice); okt.buy(10_000, 0);
-            vm.prank(bob);   okt.buy(10_000, 0);
+            vm.prank(alice); okt.buy(10_000);
+            vm.prank(bob);   okt.buy(10_000);
 
             uint256 aliceBal = okt.balanceOf(alice);
             if (aliceBal > 1000) {
-                vm.prank(alice); okt.sell(1000, 0);
+                vm.prank(alice); okt.sell(1000);
             }
 
             uint256 bobDivs = okt.dividendsOf(bob);
@@ -92,7 +92,7 @@ contract OKTSecurityTest is Test {
                 vm.prank(bob); okt.withdraw();
             }
 
-            vm.prank(carol); okt.buy(5_000, 0);
+            vm.prank(carol); okt.buy(5_000);
         }
 
         // Final solvency check
@@ -109,10 +109,10 @@ contract OKTSecurityTest is Test {
 
     function test_precisionLoss_minimumBuy() public {
         // First buyer
-        vm.prank(alice); okt.buy(100, 0); // minimum buy
+        vm.prank(alice); okt.buy(100); // minimum buy
 
         // Second buyer minimum
-        vm.prank(bob); okt.buy(100, 0);
+        vm.prank(bob); okt.buy(100);
 
         // Contract should hold exactly 200 sats
         assertEq(cbbtc.balanceOf(address(okt)), 200);
@@ -124,13 +124,13 @@ contract OKTSecurityTest is Test {
 
     function test_precisionLoss_manySmallBuys() public {
         // First buyer
-        vm.prank(alice); okt.buy(100_000, 0);
+        vm.prank(alice); okt.buy(100_000);
 
         uint256 contractBefore = cbbtc.balanceOf(address(okt));
 
         // 200 minimum buys from different senders
         for (uint i = 0; i < 200; i++) {
-            vm.prank(bob); okt.buy(100, 0);
+            vm.prank(bob); okt.buy(100);
         }
 
         uint256 contractAfter = cbbtc.balanceOf(address(okt));
@@ -141,14 +141,14 @@ contract OKTSecurityTest is Test {
     }
 
     function test_precisionLoss_manySmallSells() public {
-        vm.prank(alice); okt.buy(100_000, 0);
-        vm.prank(bob);   okt.buy(100_000, 0);
+        vm.prank(alice); okt.buy(100_000);
+        vm.prank(bob);   okt.buy(100_000);
 
         // Bob sells 1 token at a time, 100 times
         for (uint i = 0; i < 100; i++) {
             uint256 bobBal = okt.balanceOf(bob);
             if (bobBal > 1 && okt.totalSupply() > 1) {
-                vm.prank(bob); okt.sell(100, 0);
+                vm.prank(bob); okt.sell(100);
             }
         }
 
@@ -159,8 +159,8 @@ contract OKTSecurityTest is Test {
 
     function test_precisionLoss_largeSpread() public {
         // One whale, one small buyer — tests precision with very different balances
-        vm.prank(alice); okt.buy(1_000_000, 0); // max buy whale
-        vm.prank(bob);   okt.buy(100, 0);        // minimum buy
+        vm.prank(alice); okt.buy(1_000_000); // max buy whale
+        vm.prank(bob);   okt.buy(100);        // minimum buy
 
         uint256 aliceDivs = okt.dividendsOf(alice);
         uint256 bobDivs   = okt.dividendsOf(bob);
@@ -179,8 +179,8 @@ contract OKTSecurityTest is Test {
     // ═══════════════════════════════════════════════════════════════════════════
 
     function test_reinvestDustLoop_blocked() public {
-        vm.prank(alice); okt.buy(10_000, 0);
-        vm.prank(bob);   okt.buy(200, 0); // tiny buy generates small dividend
+        vm.prank(alice); okt.buy(10_000);
+        vm.prank(bob);   okt.buy(200); // tiny buy generates small dividend
 
         uint256 supplyBefore = okt.totalSupply();
 
@@ -238,7 +238,7 @@ contract OKTSecurityTest is Test {
 
         // Vault sells — should trigger VaultSwept
         vm.prank(vault1);
-        okt.sell(1000, 0);
+        okt.sell(1000);
 
         // Check vault is marked as swept
         (bool registered, bool swept,,) = okt.vaultStatus(vault1);
@@ -250,7 +250,7 @@ contract OKTSecurityTest is Test {
         okt.inscribe(vault1, bytes32("TEST-001"), 50_000, 0, "");
 
         // Need another holder to transfer to
-        vm.prank(alice); okt.buy(10_000, 0);
+        vm.prank(alice); okt.buy(10_000);
 
         // Vault transfers — should trigger sweep
         vm.prank(vault1);
@@ -265,7 +265,7 @@ contract OKTSecurityTest is Test {
         okt.inscribe(vault1, bytes32("TEST-001"), 50_000, 0, "");
 
         // Generate some dividends for the vault
-        vm.prank(alice); okt.buy(100_000, 0);
+        vm.prank(alice); okt.buy(100_000);
 
         uint256 vaultDivs = okt.dividendsOf(vault1);
         if (vaultDivs > 0) {
@@ -283,14 +283,14 @@ contract OKTSecurityTest is Test {
     // ═══════════════════════════════════════════════════════════════════════════
 
     function test_doubleSpend_sellThenWithdraw() public {
-        vm.prank(alice); okt.buy(1_000_000, 0);
-        vm.prank(bob);   okt.buy(1_000_000, 0);
+        vm.prank(alice); okt.buy(1_000_000);
+        vm.prank(bob);   okt.buy(1_000_000);
 
         uint256 bobCbbtcBefore = cbbtc.balanceOf(bob);
 
         // Bob sells everything except 1
         uint256 bobTokens = okt.balanceOf(bob);
-        vm.prank(bob); okt.sell(bobTokens - 1, 0);
+        vm.prank(bob); okt.sell(bobTokens - 1);
 
         // Bob tries to withdraw any remaining dividends
         uint256 bobDivs = okt.dividendsOf(bob);
@@ -307,16 +307,16 @@ contract OKTSecurityTest is Test {
     }
 
     function test_doubleSpend_rapidBuySellCycle() public {
-        vm.prank(alice); okt.buy(1_000_000, 0); // seed
+        vm.prank(alice); okt.buy(1_000_000); // seed
 
         uint256 attackerBefore = cbbtc.balanceOf(attacker);
 
         // Attacker tries rapid buy/sell/withdraw 20 times
         for (uint i = 0; i < 20; i++) {
-            vm.prank(attacker); okt.buy(10_000, 0);
+            vm.prank(attacker); okt.buy(10_000);
             uint256 bal = okt.balanceOf(attacker);
             if (bal > 1 && okt.totalSupply() > bal) {
-                vm.prank(attacker); okt.sell(bal - 1, 0);
+                vm.prank(attacker); okt.sell(bal - 1);
             }
             uint256 divs = okt.dividendsOf(attacker);
             if (divs > 0) {
@@ -337,43 +337,43 @@ contract OKTSecurityTest is Test {
     function test_zeroBuyReverts() public {
         vm.prank(alice);
         vm.expectRevert("Minimum 100 sats");
-        okt.buy(0, 0);
+        okt.buy(0);
     }
 
     function test_zeroSellReverts() public {
-        vm.prank(alice); okt.buy(10_000, 0);
+        vm.prank(alice); okt.buy(10_000);
         vm.prank(alice);
         vm.expectRevert("Minimum 100 sats to sell");
-        okt.sell(0, 0);
+        okt.sell(0);
     }
 
     function test_sellMoreThanBalanceReverts() public {
-        vm.prank(alice); okt.buy(10_000, 0);
+        vm.prank(alice); okt.buy(10_000);
         vm.prank(alice);
         vm.expectRevert("Insufficient balance");
-        okt.sell(999_999, 0);
+        okt.sell(999_999);
     }
 
     function test_transferToZeroReverts() public {
-        vm.prank(alice); okt.buy(10_000, 0);
+        vm.prank(alice); okt.buy(10_000);
         vm.prank(alice);
         vm.expectRevert("Zero address");
         okt.transfer(address(0), 100);
     }
 
     function test_withdrawWithNoDivsReverts() public {
-        vm.prank(alice); okt.buy(10_000, 0);
+        vm.prank(alice); okt.buy(10_000);
         vm.prank(alice);
         vm.expectRevert("No dividends to withdraw");
         okt.withdraw();
     }
 
     function test_sellEntireSupplyReverts() public {
-        vm.prank(alice); okt.buy(10_000, 0);
+        vm.prank(alice); okt.buy(10_000);
         uint256 bal = okt.balanceOf(alice);
         vm.prank(alice);
         vm.expectRevert("Cannot sell entire supply");
-        okt.sell(bal, 0);
+        okt.sell(bal);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
