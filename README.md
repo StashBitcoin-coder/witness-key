@@ -1,6 +1,6 @@
 # Witness Key (WK) — The Glass Vault™
 
-![tests](https://github.com/StashBitcoin-coder/okt-tests/actions/workflows/test.yml/badge.svg)
+![tests](https://github.com/StashBitcoin-coder/witness-key/actions/workflows/test.yml/badge.svg)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 ![solidity](https://img.shields.io/badge/solidity-0.8.20-363636)
 
