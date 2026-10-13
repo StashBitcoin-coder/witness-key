@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
-import "../src/OriginKeyToken.sol";
+import "../src/WitnessKey.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 contract MockCbBTC is ERC20 {
@@ -11,38 +11,33 @@ contract MockCbBTC is ERC20 {
     function decimals() public pure override returns (uint8) { return 8; }
 }
 
-contract MockBadDecimals is ERC20 {
-    constructor() ERC20("Bad BTC", "BADBTC") {}
-    function decimals() public pure override returns (uint8) { return 18; }
-}
-
 // Malicious contract that tries reentrancy
 contract ReentrancyAttacker {
-    OriginKeyToken public okt;
+    WitnessKey public wk;
     MockCbBTC public cbbtc;
     uint256 public attackCount;
 
-    constructor(OriginKeyToken _okt, MockCbBTC _cbbtc) {
-        okt = _okt;
+    constructor(WitnessKey _okt, MockCbBTC _cbbtc) {
+        wk = _okt;
         cbbtc = _cbbtc;
     }
 
     function attack(uint256 amount) external {
-        cbbtc.approve(address(okt), type(uint256).max);
-        okt.buy(amount, 0);
+        cbbtc.approve(address(wk), type(uint256).max);
+        wk.acquire(amount, 0);
     }
 
     // Try to reenter on cbBTC transfer callback
     fallback() external {
         if (attackCount < 3) {
             attackCount++;
-            try okt.withdraw() {} catch {}
+            try wk.claim() {} catch {}
         }
     }
 }
 
-contract OKTAuditTest is Test {
-    OriginKeyToken public okt;
+contract WitnessKeyAuditTest is Test {
+    WitnessKey public wk;
     MockCbBTC      public cbbtc;
 
     address public registrar = address(this);
@@ -53,17 +48,17 @@ contract OKTAuditTest is Test {
 
     function setUp() public {
         cbbtc = new MockCbBTC();
-        okt   = new OriginKeyToken(address(cbbtc));
+        wk   = new WitnessKey(address(cbbtc));
 
         cbbtc.mint(alice,     100_000_000);
         cbbtc.mint(bob,       100_000_000);
         cbbtc.mint(carol,     100_000_000);
         cbbtc.mint(registrar, 100_000_000);
 
-        vm.prank(alice); cbbtc.approve(address(okt), type(uint256).max);
-        vm.prank(bob);   cbbtc.approve(address(okt), type(uint256).max);
-        vm.prank(carol); cbbtc.approve(address(okt), type(uint256).max);
-        cbbtc.approve(address(okt), type(uint256).max);
+        vm.prank(alice); cbbtc.approve(address(wk), type(uint256).max);
+        vm.prank(bob);   cbbtc.approve(address(wk), type(uint256).max);
+        vm.prank(carol); cbbtc.approve(address(wk), type(uint256).max);
+        cbbtc.approve(address(wk), type(uint256).max);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -71,21 +66,21 @@ contract OKTAuditTest is Test {
     // ═══════════════════════════════════════════════════════════════════════════
 
     function test_reentrancyOnWithdraw() public {
-        vm.prank(alice); okt.buy(100_000, 0);
+        vm.prank(alice); wk.acquire(100_000, 0);
 
-        ReentrancyAttacker attacker = new ReentrancyAttacker(okt, cbbtc);
+        ReentrancyAttacker attacker = new ReentrancyAttacker(wk, cbbtc);
         cbbtc.mint(address(attacker), 100_000);
 
         attacker.attack(10_000);
 
-        // Generate dividends for attacker
-        vm.prank(bob); okt.buy(100_000, 0);
+        // Generate recirculation for attacker
+        vm.prank(bob); wk.acquire(100_000, 0);
 
         // Attacker tries to reenter — ReentrancyGuard should block
-        uint256 contractBefore = cbbtc.balanceOf(address(okt));
+        uint256 contractBefore = cbbtc.balanceOf(address(wk));
         // The reentrancy attempt happens inside withdraw via fallback
         // ReentrancyGuard prevents double withdrawal
-        uint256 contractAfter = cbbtc.balanceOf(address(okt));
+        uint256 contractAfter = cbbtc.balanceOf(address(wk));
         assertGe(contractAfter, 0, "Reentrancy should not drain contract");
     }
 
@@ -95,24 +90,24 @@ contract OKTAuditTest is Test {
 
     // Sandwich attack simulation — buy before, sell after a large trade
     function test_sandwichAttackUnprofitable() public {
-        vm.prank(alice); okt.buy(1_000_000, 0); // seed
+        vm.prank(alice); wk.acquire(1_000_000, 0); // seed
 
         uint256 attackerBefore = cbbtc.balanceOf(bob);
 
         // Attacker front-runs with buy
-        vm.prank(bob); okt.buy(100_000, 0);
+        vm.prank(bob); wk.acquire(100_000, 0);
 
         // Victim makes large buy
-        vm.prank(carol); okt.buy(1_000_000, 0);
+        vm.prank(carol); wk.acquire(1_000_000, 0);
 
         // Attacker back-runs with sell
-        uint256 bobBal = okt.balanceOf(bob);
-        if (bobBal > 1 && okt.totalSupply() > bobBal) {
-            vm.prank(bob); okt.sell(bobBal - 1, 0);
+        uint256 bobBal = wk.balanceOf(bob);
+        if (bobBal > 1 && wk.totalSupply() > bobBal) {
+            vm.prank(bob); wk.dispose(bobBal - 1, 0);
         }
-        uint256 bobDivs = okt.dividendsOf(bob);
+        uint256 bobDivs = wk.recirculationOf(bob);
         if (bobDivs > 0) {
-            vm.prank(bob); okt.withdraw();
+            vm.prank(bob); wk.claim();
         }
 
         uint256 attackerAfter = cbbtc.balanceOf(bob);
@@ -123,23 +118,23 @@ contract OKTAuditTest is Test {
 
     // Flash loan simulation — massive buy/sell in same context
     function test_flashLoanAttackUnprofitable() public {
-        vm.prank(alice); okt.buy(1_000_000, 0); // seed
+        vm.prank(alice); wk.acquire(1_000_000, 0); // seed
 
         uint256 attackerBefore = cbbtc.balanceOf(bob);
 
         // Simulate flash loan — buy massive amount
-        vm.prank(bob); okt.buy(1_000_000, 0);
+        vm.prank(bob); wk.acquire(1_000_000, 0);
 
         // Immediately sell
-        uint256 bobBal = okt.balanceOf(bob);
-        if (bobBal > 1 && okt.totalSupply() > bobBal) {
-            vm.prank(bob); okt.sell(bobBal - 1, 0);
+        uint256 bobBal = wk.balanceOf(bob);
+        if (bobBal > 1 && wk.totalSupply() > bobBal) {
+            vm.prank(bob); wk.dispose(bobBal - 1, 0);
         }
 
-        // Collect any dividends
-        uint256 bobDivs = okt.dividendsOf(bob);
+        // Collect any recirculation
+        uint256 bobDivs = wk.recirculationOf(bob);
         if (bobDivs > 0) {
-            vm.prank(bob); okt.withdraw();
+            vm.prank(bob); wk.claim();
         }
 
         uint256 attackerAfter = cbbtc.balanceOf(bob);
@@ -153,18 +148,18 @@ contract OKTAuditTest is Test {
         // Attacker buys massive amount to dominate supply
         // Whale buys max 10 times
         for (uint i = 0; i < 10; i++) {
-            vm.prank(bob); okt.buy(1_000_000, 0);
+            vm.prank(bob); wk.acquire(1_000_000, 0);
         }
 
         // Other users should still be able to buy
-        vm.prank(alice); okt.buy(100_000, 0);
-        assertGt(okt.balanceOf(alice), 0, "Alice should still be able to buy");
+        vm.prank(alice); wk.acquire(100_000, 0);
+        assertGt(wk.balanceOf(alice), 0, "Alice should still be able to buy");
 
-        // Larger buy to generate meaningful dividends
-        vm.prank(carol); okt.buy(1_000_000, 0);
-        uint256 aliceDivs = okt.dividendsOf(alice);
+        // Larger buy to generate meaningful recirculation
+        vm.prank(carol); wk.acquire(1_000_000, 0);
+        uint256 aliceDivs = wk.recirculationOf(alice);
         // Alice holds ~0.2% of supply so gets ~0.2% of 70,000 fee = ~140 sats
-        assertGt(aliceDivs, 0, "Alice should earn dividends even with whale");
+        assertGt(aliceDivs, 0, "Alice should earn recirculation even with whale");
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -173,26 +168,26 @@ contract OKTAuditTest is Test {
 
     function test_maxBuyDoesNotOverflow() public {
         // Buy with max amount — should work cleanly
-        vm.prank(alice); okt.buy(1_000_000, 0);
-        assertGt(okt.balanceOf(alice), 0, "Max buy should work");
-        assertGt(okt.totalSupply(), 0, "Supply should increase");
+        vm.prank(alice); wk.acquire(1_000_000, 0);
+        assertGt(wk.balanceOf(alice), 0, "Max buy should work");
+        assertGt(wk.totalSupply(), 0, "Supply should increase");
     }
 
-    function test_profitPerTokenDoesNotOverflow() public {
+    function test_recirculationPerTokenDoesNotOverflow() public {
         // Small supply, large fee — worst case for overflow
-        vm.prank(alice); okt.buy(100, 0); // minimum buy, first buyer gets 100
+        vm.prank(alice); wk.acquire(100, 0); // minimum buy, first buyer gets 100
 
         // Large buy generates large fee distributed to small supply
-        vm.prank(bob); okt.buy(1_000_000, 0);
+        vm.prank(bob); wk.acquire(1_000_000, 0);
 
-        // profitPerToken should be very large but not overflow
-        uint256 ppt = okt.profitPerToken();
-        assertGt(ppt, 0, "profitPerToken should increase");
+        // recirculationPerToken should be very large but not overflow
+        uint256 ppt = wk.recirculationPerToken();
+        assertGt(ppt, 0, "recirculationPerToken should increase");
 
-        // Alice's dividends should be reasonable
-        uint256 aliceDivs = okt.dividendsOf(alice);
-        assertGt(aliceDivs, 0, "Alice should have dividends");
-        assertLe(aliceDivs, 1_000_000, "Alice dividends should not exceed fee input");
+        // Alice's recirculation should be reasonable
+        uint256 aliceDivs = wk.recirculationOf(alice);
+        assertGt(aliceDivs, 0, "Alice should have recirculation");
+        assertLe(aliceDivs, 1_000_000, "Alice recirculation should not exceed fee input");
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -204,35 +199,35 @@ contract OKTAuditTest is Test {
         uint256 totalOut = 0;
 
         // Track all cbBTC entering contract
-        vm.prank(alice); okt.buy(100_000, 0);
+        vm.prank(alice); wk.acquire(100_000, 0);
         totalIn += 100_000;
 
-        vm.prank(bob); okt.buy(200_000, 0);
+        vm.prank(bob); wk.acquire(200_000, 0);
         totalIn += 200_000;
 
-        vm.prank(carol); okt.buy(50_000, 0);
+        vm.prank(carol); wk.acquire(50_000, 0);
         totalIn += 50_000;
 
         // Track all cbBTC leaving contract
         uint256 bobBefore = cbbtc.balanceOf(bob);
-        uint256 bobBal = okt.balanceOf(bob);
-        vm.prank(bob); okt.sell(bobBal - 1, 0);
-        uint256 bobDivs = okt.dividendsOf(bob);
+        uint256 bobBal = wk.balanceOf(bob);
+        vm.prank(bob); wk.dispose(bobBal - 1, 0);
+        uint256 bobDivs = wk.recirculationOf(bob);
         if (bobDivs > 0) {
-            vm.prank(bob); okt.withdraw();
+            vm.prank(bob); wk.claim();
         }
         uint256 bobAfter = cbbtc.balanceOf(bob);
         totalOut += (bobAfter - bobBefore);
 
-        uint256 aliceDivs = okt.dividendsOf(alice);
+        uint256 aliceDivs = wk.recirculationOf(alice);
         if (aliceDivs > 0) {
             uint256 aliceBefore = cbbtc.balanceOf(alice);
-            vm.prank(alice); okt.withdraw();
+            vm.prank(alice); wk.claim();
             totalOut += (cbbtc.balanceOf(alice) - aliceBefore);
         }
 
         // What remains in contract
-        uint256 contractBal = cbbtc.balanceOf(address(okt));
+        uint256 contractBal = cbbtc.balanceOf(address(wk));
 
         // Total in should equal total out + what's still in contract (within rounding)
         uint256 totalAccounted = totalOut + contractBal;
@@ -246,16 +241,16 @@ contract OKTAuditTest is Test {
     // ═══════════════════════════════════════════════════════════════════════════
 
     function test_gasConsistentAfterManyTransactions() public {
-        vm.prank(alice); okt.buy(1_000_000, 0);
+        vm.prank(alice); wk.acquire(1_000_000, 0);
 
         // Do 100 transactions to grow state
         for (uint i = 0; i < 100; i++) {
-            vm.prank(bob); okt.buy(1_000, 0);
+            vm.prank(bob); wk.acquire(1_000, 0);
         }
 
         // Measure gas for a buy after 100 transactions
         uint256 gasBefore = gasleft();
-        vm.prank(carol); okt.buy(1_000, 0);
+        vm.prank(carol); wk.acquire(1_000, 0);
         uint256 gasUsed = gasBefore - gasleft();
 
         // Gas should be reasonable — under 200k
@@ -263,15 +258,15 @@ contract OKTAuditTest is Test {
     }
 
     function test_gasConsistentForSellAfterManyTransactions() public {
-        vm.prank(alice); okt.buy(1_000_000, 0);
+        vm.prank(alice); wk.acquire(1_000_000, 0);
 
         for (uint i = 0; i < 100; i++) {
-            vm.prank(bob); okt.buy(1_000, 0);
+            vm.prank(bob); wk.acquire(1_000, 0);
         }
 
-        uint256 bobBal = okt.balanceOf(bob);
+        uint256 bobBal = wk.balanceOf(bob);
         uint256 gasBefore = gasleft();
-        vm.prank(bob); okt.sell(bobBal - 1, 0);
+        vm.prank(bob); wk.dispose(bobBal - 1, 0);
         uint256 gasUsed = gasBefore - gasleft();
 
         assertLt(gasUsed, 200_000, "Sell gas cost grew unreasonably");
@@ -282,22 +277,22 @@ contract OKTAuditTest is Test {
     // ═══════════════════════════════════════════════════════════════════════════
 
     function test_registrarCannotChangeAfterDeploy() public {
-        address reg = okt.vaultRegistrar();
+        address reg = wk.vaultRegistrar();
         assertEq(reg, address(this), "Registrar should be deployer");
         // No function exists to change registrar — this is verified by the
         // contract not having a setRegistrar() function
     }
 
     function test_oracleCannotChangeAfterDeploy() public {
-        address oracle = okt.ordinalOracle();
+        address oracle = wk.ordinalOracle();
         assertEq(oracle, address(this), "Oracle should be deployer");
         // No function exists to change oracle — immutable by design
     }
 
     function test_feeCannotBeChanged() public {
-        assertEq(okt.BUY_FEE(), 7);
-        assertEq(okt.SELL_FEE(), 7);
-        assertEq(okt.INSCRIBE_FEE(), 7);
+        assertEq(wk.ACQUIRE_DISTRIBUTION(), 7);
+        assertEq(wk.DISPOSE_DISTRIBUTION(), 7);
+        assertEq(wk.INSCRIBE_DISTRIBUTION(), 7);
         // Constants — cannot be changed after deploy
     }
 
@@ -306,106 +301,100 @@ contract OKTAuditTest is Test {
     // ═══════════════════════════════════════════════════════════════════════════
 
     function test_buyExactMinimum() public {
-        vm.prank(alice); okt.buy(100, 0);
-        assertEq(okt.balanceOf(alice), 100); // first buyer gets fee back
+        vm.prank(alice); wk.acquire(100, 0);
+        assertEq(wk.balanceOf(alice), 100); // first buyer gets fee back
     }
 
     function test_buyAboveMaxReverts() public {
         vm.prank(alice);
-        vm.expectRevert("Maximum 1,000,000 sats per buy");
-        okt.buy(1_000_001, 0);
+        vm.expectRevert("Maximum 1,000,000 sats per acquire");
+        wk.acquire(1_000_001, 0);
     }
 
     function test_buyExactMaxWorks() public {
-        vm.prank(alice); okt.buy(100, 0); // seed first buyer
-        vm.prank(bob);   okt.buy(1_000_000, 0);
-        assertGt(okt.balanceOf(bob), 0, "Max buy should work");
+        vm.prank(alice); wk.acquire(100, 0); // seed first buyer
+        vm.prank(bob);   wk.acquire(1_000_000, 0);
+        assertGt(wk.balanceOf(bob), 0, "Max buy should work");
     }
 
     function test_buyBelowMinimumReverts() public {
         vm.prank(alice);
         vm.expectRevert("Minimum 100 sats");
-        okt.buy(99, 0);
+        wk.acquire(99, 0);
     }
 
     function test_inscribeBelowMinimumReverts() public {
         vm.expectRevert("Vault: minimum 100 sats");
-        okt.inscribe(vault1, bytes32("TEST"), 99, 0, "");
+        wk.inscribe(vault1, bytes32("TEST"), 99, 0, "");
     }
 
     // sellOneToken removed — replaced by test_sellBelowMinimumReverts and test_sellMinimumChargesFee
 
     function test_sellBelowMinimumReverts() public {
-        vm.prank(alice); okt.buy(10_000, 0);
-        vm.prank(bob);   okt.buy(10_000, 0);
+        vm.prank(alice); wk.acquire(10_000, 0);
+        vm.prank(bob);   wk.acquire(10_000, 0);
 
         vm.prank(bob);
-        vm.expectRevert("Minimum 100 sats to sell");
-        okt.sell(99, 0);
+        vm.expectRevert("Minimum 100 sats to dispose");
+        wk.dispose(99, 0);
     }
 
     function test_sellMinimumChargesFee() public {
-        vm.prank(alice); okt.buy(10_000, 0);
-        vm.prank(bob);   okt.buy(10_000, 0);
+        vm.prank(alice); wk.acquire(10_000, 0);
+        vm.prank(bob);   wk.acquire(10_000, 0);
 
         uint256 bobBefore = cbbtc.balanceOf(bob);
         vm.prank(bob);
-        okt.sell(100, 0);
+        wk.dispose(100, 0);
         uint256 bobAfter = cbbtc.balanceOf(bob);
         assertEq(bobAfter - bobBefore, 93, "Minimum sell should charge 7 sats");
     }
 
-    function test_constructorRejectsNonEightDecimalReserve() public {
-        MockBadDecimals badToken = new MockBadDecimals();
-        vm.expectRevert("cbBTC: expected 8 decimals");
-        new OriginKeyToken(address(badToken));
-    }
-
     function test_erc20AllowanceFunctionsNotExposed() public {
-        (bool approveOk,) = address(okt).call(abi.encodeWithSignature("approve(address,uint256)", alice, 1));
-        (bool allowanceOk,) = address(okt).staticcall(abi.encodeWithSignature("allowance(address,address)", alice, bob));
-        (bool transferFromOk,) = address(okt).call(abi.encodeWithSignature("transferFrom(address,address,uint256)", alice, bob, 1));
+        (bool approveOk,) = address(wk).call(abi.encodeWithSignature("approve(address,uint256)", alice, 1));
+        (bool allowanceOk,) = address(wk).staticcall(abi.encodeWithSignature("allowance(address,address)", alice, bob));
+        (bool transferFromOk,) = address(wk).call(abi.encodeWithSignature("transferFrom(address,address,uint256)", alice, bob, 1));
         assertFalse(approveOk, "approve should not be exposed");
         assertFalse(allowanceOk, "allowance should not be exposed");
         assertFalse(transferFromOk, "transferFrom should not be exposed");
     }
 
     function test_zeroTransferReverts() public {
-        vm.prank(alice); okt.buy(10_000, 0);
+        vm.prank(alice); wk.acquire(10_000, 0);
         vm.prank(alice);
         vm.expectRevert("Zero tokens");
-        okt.transfer(bob, 0);
+        wk.transfer(bob, 0);
     }
 
     function test_duplicateOrdinalReverts() public {
-        okt.inscribe(vault1, bytes32("ART-001"), 10_000, 12345, "abc123i0");
+        wk.inscribe(vault1, bytes32("ART-001"), 10_000, 12345, "abc123i0");
         address vault2 = makeAddr("vault2");
         vm.expectRevert("Ordinal: already registered");
-        okt.inscribe(vault2, bytes32("ART-002"), 10_000, 12345, "def456i0");
+        wk.inscribe(vault2, bytes32("ART-002"), 10_000, 12345, "def456i0");
     }
 
     function test_movedOrdinalCannotBeRegistered() public {
-        okt.inscribe(vault1, bytes32("ART-001"), 10_000, 12345, "abc123i0");
+        wk.inscribe(vault1, bytes32("ART-001"), 10_000, 12345, "abc123i0");
         // Report a different ordinal as moved without registering it first
         // We need an ordinal that exists in the mapping but is moved
         // Since 12345 is already registered, it hits "already registered" first
         // So we test that the "already registered" guard catches it
         address vault2 = makeAddr("vault2");
         vm.expectRevert("Ordinal: already registered");
-        okt.inscribe(vault2, bytes32("ART-002"), 10_000, 12345, "def456i0");
+        wk.inscribe(vault2, bytes32("ART-002"), 10_000, 12345, "def456i0");
     }
 
     function test_multipleVaultsEarnProportionally() public {
         // Inscribe two vaults with different amounts
-        okt.inscribe(vault1, bytes32("BIG"), 100_000, 0, "");
+        wk.inscribe(vault1, bytes32("BIG"), 100_000, 0, "");
         address vault2 = makeAddr("vault2");
-        okt.inscribe(vault2, bytes32("SMALL"), 10_000, 0, "");
+        wk.inscribe(vault2, bytes32("SMALL"), 10_000, 0, "");
 
-        // Generate dividends
-        vm.prank(alice); okt.buy(100_000, 0);
+        // Generate recirculation
+        vm.prank(alice); wk.acquire(100_000, 0);
 
-        uint256 vault1Divs = okt.dividendsOf(vault1);
-        uint256 vault2Divs = okt.dividendsOf(vault2);
+        uint256 vault1Divs = wk.recirculationOf(vault1);
+        uint256 vault2Divs = wk.recirculationOf(vault2);
 
         // Vault1 should earn roughly 10x more than vault2
         assertGt(vault1Divs, vault2Divs, "Larger vault should earn more");
@@ -416,45 +405,45 @@ contract OKTAuditTest is Test {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // TRANSFER INTEGRITY — dividends follow tokens correctly
+    // TRANSFER INTEGRITY — recirculation follow tokens correctly
     // ═══════════════════════════════════════════════════════════════════════════
 
-    function test_transferDoesNotCreateDividends() public {
-        vm.prank(alice); okt.buy(100_000, 0);
-        vm.prank(bob);   okt.buy(100_000, 0);
+    function test_transferDoesNotCreateRecirculation() public {
+        vm.prank(alice); wk.acquire(100_000, 0);
+        vm.prank(bob);   wk.acquire(100_000, 0);
 
-        uint256 contractBefore = cbbtc.balanceOf(address(okt));
+        uint256 contractBefore = cbbtc.balanceOf(address(wk));
 
         // Alice transfers to Carol
-        vm.prank(alice); okt.transfer(carol, 50_000);
+        vm.prank(alice); wk.transfer(carol, 50_000);
 
-        uint256 contractAfter = cbbtc.balanceOf(address(okt));
+        uint256 contractAfter = cbbtc.balanceOf(address(wk));
 
         // Contract balance should not change — transfer is feeless
         assertEq(contractBefore, contractAfter, "Transfer should not change contract balance");
 
         // Total claimable should not exceed contract balance
-        uint256 totalOwed = okt.dividendsOf(alice)
-                          + okt.dividendsOf(bob)
-                          + okt.dividendsOf(carol);
-        assertGe(contractAfter, totalOwed, "Transfer created phantom dividends");
+        uint256 totalOwed = wk.recirculationOf(alice)
+                          + wk.recirculationOf(bob)
+                          + wk.recirculationOf(carol);
+        assertGe(contractAfter, totalOwed, "Transfer created phantom recirculation");
     }
 
-    function test_transferPreservesDividends() public {
-        vm.prank(alice); okt.buy(100_000, 0);
-        vm.prank(bob);   okt.buy(100_000, 0);
+    function test_transferPreservesRecirculation() public {
+        vm.prank(alice); wk.acquire(100_000, 0);
+        vm.prank(bob);   wk.acquire(100_000, 0);
 
-        uint256 aliceDivsBefore = okt.dividendsOf(alice);
+        uint256 aliceDivsBefore = wk.recirculationOf(alice);
 
         // Alice transfers half her tokens to Carol
-        vm.prank(alice); okt.transfer(carol, 50_000);
+        vm.prank(alice); wk.transfer(carol, 50_000);
 
-        // Alice + Carol dividends should roughly equal Alice's original dividends
-        uint256 aliceDivsAfter = okt.dividendsOf(alice);
-        uint256 carolDivs = okt.dividendsOf(carol);
+        // Alice + Carol recirculation should roughly equal Alice's original recirculation
+        uint256 aliceDivsAfter = wk.recirculationOf(alice);
+        uint256 carolDivs = wk.recirculationOf(carol);
 
         // Allow 5 sats rounding tolerance
-        assertGe(aliceDivsBefore + 5, aliceDivsAfter + carolDivs, "Transfer lost dividends");
-        assertGe(aliceDivsAfter + carolDivs + 5, aliceDivsBefore, "Transfer created dividends");
+        assertGe(aliceDivsBefore + 5, aliceDivsAfter + carolDivs, "Transfer lost recirculation");
+        assertGe(aliceDivsAfter + carolDivs + 5, aliceDivsBefore, "Transfer created recirculation");
     }
 }

@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
-import "../src/OriginKeyToken.sol";
+import "../src/WitnessKey.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 contract MockCbBTC is ERC20 {
@@ -11,8 +11,8 @@ contract MockCbBTC is ERC20 {
     function decimals() public pure override returns (uint8) { return 8; }
 }
 
-contract OKTSecurityTest is Test {
-    OriginKeyToken public okt;
+contract WitnessKeySecurityTest is Test {
+    WitnessKey public wk;
     MockCbBTC      public cbbtc;
 
     address public registrar = address(this);
@@ -25,7 +25,7 @@ contract OKTSecurityTest is Test {
 
     function setUp() public {
         cbbtc = new MockCbBTC();
-        okt   = new OriginKeyToken(address(cbbtc));
+        wk   = new WitnessKey(address(cbbtc));
 
         // Fund wallets generously
         cbbtc.mint(alice,     100_000_000); // 1 BTC
@@ -35,72 +35,72 @@ contract OKTSecurityTest is Test {
         cbbtc.mint(registrar, 100_000_000);
 
         // Approve
-        vm.prank(alice);    cbbtc.approve(address(okt), type(uint256).max);
-        vm.prank(bob);      cbbtc.approve(address(okt), type(uint256).max);
-        vm.prank(carol);    cbbtc.approve(address(okt), type(uint256).max);
-        vm.prank(attacker); cbbtc.approve(address(okt), type(uint256).max);
-        cbbtc.approve(address(okt), type(uint256).max);
+        vm.prank(alice);    cbbtc.approve(address(wk), type(uint256).max);
+        vm.prank(bob);      cbbtc.approve(address(wk), type(uint256).max);
+        vm.prank(carol);    cbbtc.approve(address(wk), type(uint256).max);
+        vm.prank(attacker); cbbtc.approve(address(wk), type(uint256).max);
+        cbbtc.approve(address(wk), type(uint256).max);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // DIVIDEND DRIFT — does repeated buy/sell/withdraw slowly leak value?
     // ═══════════════════════════════════════════════════════════════════════════
 
-    function test_dividendDrift_100Cycles() public {
+    function test_recirculationDrift_100Cycles() public {
         // Seed the contract
-        vm.prank(alice); okt.buy(1_000_000, 0);
+        vm.prank(alice); wk.acquire(1_000_000, 0);
 
-        uint256 contractBalBefore = cbbtc.balanceOf(address(okt));
+        uint256 contractBalBefore = cbbtc.balanceOf(address(wk));
 
         // Bob does 100 buy/sell/withdraw cycles
         for (uint i = 0; i < 100; i++) {
-            vm.prank(bob); okt.buy(10_000, 0);
-            uint256 bobBal = okt.balanceOf(bob);
+            vm.prank(bob); wk.acquire(10_000, 0);
+            uint256 bobBal = wk.balanceOf(bob);
             if (bobBal > 1) {
-                vm.prank(bob); okt.sell(bobBal - 1, 0);
+                vm.prank(bob); wk.dispose(bobBal - 1, 0);
             }
-            uint256 bobDivs = okt.dividendsOf(bob);
+            uint256 bobDivs = wk.recirculationOf(bob);
             if (bobDivs > 0) {
-                vm.prank(bob); okt.withdraw();
+                vm.prank(bob); wk.claim();
             }
         }
 
-        // Contract must still cover Alice's dividends
-        uint256 contractBalAfter = cbbtc.balanceOf(address(okt));
-        uint256 aliceDivs = okt.dividendsOf(alice);
-        assertGe(contractBalAfter, aliceDivs, "Dividend drift: contract underfunded after 100 cycles");
+        // Contract must still cover Alice's recirculation
+        uint256 contractBalAfter = cbbtc.balanceOf(address(wk));
+        uint256 aliceDivs = wk.recirculationOf(alice);
+        assertGe(contractBalAfter, aliceDivs, "Recirculation drift: contract underfunded after 100 cycles");
     }
 
-    function test_dividendDrift_multipleActors() public {
+    function test_recirculationDrift_multipleActors() public {
         // Three actors trading simultaneously
-        vm.prank(alice); okt.buy(500_000, 0);
-        vm.prank(bob);   okt.buy(500_000, 0);
-        vm.prank(carol); okt.buy(500_000, 0);
+        vm.prank(alice); wk.acquire(500_000, 0);
+        vm.prank(bob);   wk.acquire(500_000, 0);
+        vm.prank(carol); wk.acquire(500_000, 0);
 
         for (uint i = 0; i < 50; i++) {
             // Each actor buys, sells, withdraws in rotation
-            vm.prank(alice); okt.buy(10_000, 0);
-            vm.prank(bob);   okt.buy(10_000, 0);
+            vm.prank(alice); wk.acquire(10_000, 0);
+            vm.prank(bob);   wk.acquire(10_000, 0);
 
-            uint256 aliceBal = okt.balanceOf(alice);
+            uint256 aliceBal = wk.balanceOf(alice);
             if (aliceBal > 1000) {
-                vm.prank(alice); okt.sell(1000, 0);
+                vm.prank(alice); wk.dispose(1000, 0);
             }
 
-            uint256 bobDivs = okt.dividendsOf(bob);
+            uint256 bobDivs = wk.recirculationOf(bob);
             if (bobDivs > 0) {
-                vm.prank(bob); okt.withdraw();
+                vm.prank(bob); wk.claim();
             }
 
-            vm.prank(carol); okt.buy(5_000, 0);
+            vm.prank(carol); wk.acquire(5_000, 0);
         }
 
         // Final solvency check
-        uint256 contractBal = cbbtc.balanceOf(address(okt));
-        uint256 totalOwed = okt.dividendsOf(alice)
-                          + okt.dividendsOf(bob)
-                          + okt.dividendsOf(carol);
-        assertGe(contractBal, totalOwed, "Dividend drift: multi-actor solvency broken");
+        uint256 contractBal = cbbtc.balanceOf(address(wk));
+        uint256 totalOwed = wk.recirculationOf(alice)
+                          + wk.recirculationOf(bob)
+                          + wk.recirculationOf(carol);
+        assertGe(contractBal, totalOwed, "Recirculation drift: multi-actor solvency broken");
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -109,67 +109,67 @@ contract OKTSecurityTest is Test {
 
     function test_precisionLoss_minimumBuy() public {
         // First buyer
-        vm.prank(alice); okt.buy(100, 0); // minimum buy
+        vm.prank(alice); wk.acquire(100, 0); // minimum buy
 
         // Second buyer minimum
-        vm.prank(bob); okt.buy(100, 0);
+        vm.prank(bob); wk.acquire(100, 0);
 
         // Contract should hold exactly 200 sats
-        assertEq(cbbtc.balanceOf(address(okt)), 200);
+        assertEq(cbbtc.balanceOf(address(wk)), 200);
         // Alice got 100 (first buyer fee returned)
-        assertEq(okt.balanceOf(alice), 100);
+        assertEq(wk.balanceOf(alice), 100);
         // Bob got 93 (7% fee)
-        assertEq(okt.balanceOf(bob), 93);
+        assertEq(wk.balanceOf(bob), 93);
     }
 
     function test_precisionLoss_manySmallBuys() public {
         // First buyer
-        vm.prank(alice); okt.buy(100_000, 0);
+        vm.prank(alice); wk.acquire(100_000, 0);
 
-        uint256 contractBefore = cbbtc.balanceOf(address(okt));
+        uint256 contractBefore = cbbtc.balanceOf(address(wk));
 
         // 200 minimum buys from different senders
         for (uint i = 0; i < 200; i++) {
-            vm.prank(bob); okt.buy(100, 0);
+            vm.prank(bob); wk.acquire(100, 0);
         }
 
-        uint256 contractAfter = cbbtc.balanceOf(address(okt));
-        uint256 totalOwed = okt.dividendsOf(alice) + okt.dividendsOf(bob);
+        uint256 contractAfter = cbbtc.balanceOf(address(wk));
+        uint256 totalOwed = wk.recirculationOf(alice) + wk.recirculationOf(bob);
 
-        // Contract must cover all dividends even after many small operations
+        // Contract must cover all recirculation even after many small operations
         assertGe(contractAfter, totalOwed, "Precision loss after 200 minimum buys");
     }
 
     function test_precisionLoss_manySmallSells() public {
-        vm.prank(alice); okt.buy(100_000, 0);
-        vm.prank(bob);   okt.buy(100_000, 0);
+        vm.prank(alice); wk.acquire(100_000, 0);
+        vm.prank(bob);   wk.acquire(100_000, 0);
 
         // Bob sells 1 token at a time, 100 times
         for (uint i = 0; i < 100; i++) {
-            uint256 bobBal = okt.balanceOf(bob);
-            if (bobBal > 1 && okt.totalSupply() > 1) {
-                vm.prank(bob); okt.sell(100, 0);
+            uint256 bobBal = wk.balanceOf(bob);
+            if (bobBal > 1 && wk.totalSupply() > 1) {
+                vm.prank(bob); wk.dispose(100, 0);
             }
         }
 
-        uint256 contractBal = cbbtc.balanceOf(address(okt));
-        uint256 totalOwed = okt.dividendsOf(alice) + okt.dividendsOf(bob);
+        uint256 contractBal = cbbtc.balanceOf(address(wk));
+        uint256 totalOwed = wk.recirculationOf(alice) + wk.recirculationOf(bob);
         assertGe(contractBal, totalOwed, "Precision loss after 100 single-token sells");
     }
 
     function test_precisionLoss_largeSpread() public {
         // One whale, one small buyer — tests precision with very different balances
-        vm.prank(alice); okt.buy(1_000_000, 0); // max buy whale
-        vm.prank(bob);   okt.buy(100, 0);        // minimum buy
+        vm.prank(alice); wk.acquire(1_000_000, 0); // max buy whale
+        vm.prank(bob);   wk.acquire(100, 0);        // minimum buy
 
-        uint256 aliceDivs = okt.dividendsOf(alice);
-        uint256 bobDivs   = okt.dividendsOf(bob);
+        uint256 aliceDivs = wk.recirculationOf(alice);
+        uint256 bobDivs   = wk.recirculationOf(bob);
 
-        // Alice should get vastly more dividends than Bob (proportional to holdings)
+        // Alice should get vastly more recirculation than Bob (proportional to holdings)
         // Bob's buy fee goes to Alice who holds ~99.99% of supply
-        assertGt(aliceDivs, 0, "Whale should earn dividends");
+        assertGt(aliceDivs, 0, "Whale should earn recirculation");
 
-        uint256 contractBal = cbbtc.balanceOf(address(okt));
+        uint256 contractBal = cbbtc.balanceOf(address(wk));
         uint256 totalOwed = aliceDivs + bobDivs;
         assertGe(contractBal, totalOwed, "Precision loss with large balance spread");
     }
@@ -178,24 +178,24 @@ contract OKTSecurityTest is Test {
     // REINVEST DUST LOOP — confirm the minimum blocks exploitation
     // ═══════════════════════════════════════════════════════════════════════════
 
-    function test_reinvestDustLoop_blocked() public {
-        vm.prank(alice); okt.buy(10_000, 0);
-        vm.prank(bob);   okt.buy(200, 0); // tiny buy generates small dividend
+    function test_recirculateDustLoop_blocked() public {
+        vm.prank(alice); wk.acquire(10_000, 0);
+        vm.prank(bob);   wk.acquire(200, 0); // tiny buy generates small recirculation
 
-        uint256 supplyBefore = okt.totalSupply();
+        uint256 supplyBefore = wk.totalSupply();
 
         // Try to reinvest 50 times — should all fail
         for (uint i = 0; i < 50; i++) {
-            uint256 divs = okt.dividendsOf(alice);
+            uint256 divs = wk.recirculationOf(alice);
             if (divs < 100) {
                 vm.prank(alice);
-                vm.expectRevert("Minimum 100 sats to reinvest");
-                okt.reinvest();
+                vm.expectRevert("Minimum 100 sats to recirculate");
+                wk.recirculate();
             }
         }
 
         // Supply should not have changed
-        assertEq(okt.totalSupply(), supplyBefore, "Dust loop created phantom tokens");
+        assertEq(wk.totalSupply(), supplyBefore, "Dust loop created phantom tokens");
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -205,74 +205,74 @@ contract OKTSecurityTest is Test {
     function test_onlyRegistrarCanInscribe() public {
         vm.prank(attacker);
         vm.expectRevert("Not vault registrar");
-        okt.inscribe(vault1, bytes32("FAKE-001"), 10_000, 0, "");
+        wk.inscribe(vault1, bytes32("FAKE-001"), 10_000, 0, "");
     }
 
     function test_onlyOracleCanReportOrdinalMoved() public {
         // First inscribe a real vault
-        okt.inscribe(vault1, bytes32("TEST-001"), 10_000, 12345, "");
+        wk.inscribe(vault1, bytes32("TEST-001"), 10_000, 12345, "");
 
         vm.prank(attacker);
         vm.expectRevert("Not ordinal oracle");
-        okt.reportOrdinalMoved(12345);
+        wk.reportOrdinalMoved(12345, bytes32("btctx"));
     }
 
     function test_cannotInscribeSameVaultTwice() public {
-        okt.inscribe(vault1, bytes32("TEST-001"), 10_000, 0, "");
+        wk.inscribe(vault1, bytes32("TEST-001"), 10_000, 0, "");
 
         vm.expectRevert("Vault: already registered");
-        okt.inscribe(vault1, bytes32("TEST-002"), 10_000, 0, "");
+        wk.inscribe(vault1, bytes32("TEST-002"), 10_000, 0, "");
     }
 
     function test_cannotReportSameOrdinalTwice() public {
-        okt.inscribe(vault1, bytes32("TEST-001"), 10_000, 12345, "");
-        okt.reportOrdinalMoved(12345);
+        wk.inscribe(vault1, bytes32("TEST-001"), 10_000, 12345, "");
+        wk.reportOrdinalMoved(12345, bytes32("btctx"));
 
         vm.expectRevert("Already reported as moved");
-        okt.reportOrdinalMoved(12345);
+        wk.reportOrdinalMoved(12345, bytes32("btctx"));
     }
 
     function test_vaultSweptOnSell() public {
         // Inscribe vault
-        okt.inscribe(vault1, bytes32("TEST-001"), 50_000, 0, "");
+        wk.inscribe(vault1, bytes32("TEST-001"), 50_000, 0, "");
 
         // Vault sells — should trigger VaultSwept
         vm.prank(vault1);
-        okt.sell(1000, 0);
+        wk.dispose(1000, 0);
 
         // Check vault is marked as swept
-        (bool registered, bool swept,,) = okt.vaultStatus(vault1);
+        (bool registered, bool swept,,) = wk.vaultStatus(vault1);
         assertTrue(registered, "Vault should be registered");
         assertTrue(swept, "Vault should be swept after sell");
     }
 
     function test_vaultSweptOnTransfer() public {
-        okt.inscribe(vault1, bytes32("TEST-001"), 50_000, 0, "");
+        wk.inscribe(vault1, bytes32("TEST-001"), 50_000, 0, "");
 
         // Need another holder to transfer to
-        vm.prank(alice); okt.buy(10_000, 0);
+        vm.prank(alice); wk.acquire(10_000, 0);
 
         // Vault transfers — should trigger sweep
         vm.prank(vault1);
-        okt.transfer(alice, 100);
+        wk.transfer(alice, 100);
 
-        (bool registered, bool swept,,) = okt.vaultStatus(vault1);
+        (bool registered, bool swept,,) = wk.vaultStatus(vault1);
         assertTrue(registered);
         assertTrue(swept, "Vault should be swept after transfer");
     }
 
     function test_vaultSweptOnWithdraw() public {
-        okt.inscribe(vault1, bytes32("TEST-001"), 50_000, 0, "");
+        wk.inscribe(vault1, bytes32("TEST-001"), 50_000, 0, "");
 
-        // Generate some dividends for the vault
-        vm.prank(alice); okt.buy(100_000, 0);
+        // Generate some recirculation for the vault
+        vm.prank(alice); wk.acquire(100_000, 0);
 
-        uint256 vaultDivs = okt.dividendsOf(vault1);
+        uint256 vaultDivs = wk.recirculationOf(vault1);
         if (vaultDivs > 0) {
             vm.prank(vault1);
-            okt.withdraw();
+            wk.claim();
 
-            (bool registered, bool swept,,) = okt.vaultStatus(vault1);
+            (bool registered, bool swept,,) = wk.vaultStatus(vault1);
             assertTrue(registered);
             assertTrue(swept, "Vault should be swept after withdraw");
         }
@@ -283,19 +283,19 @@ contract OKTSecurityTest is Test {
     // ═══════════════════════════════════════════════════════════════════════════
 
     function test_doubleSpend_sellThenWithdraw() public {
-        vm.prank(alice); okt.buy(1_000_000, 0);
-        vm.prank(bob);   okt.buy(1_000_000, 0);
+        vm.prank(alice); wk.acquire(1_000_000, 0);
+        vm.prank(bob);   wk.acquire(1_000_000, 0);
 
         uint256 bobCbbtcBefore = cbbtc.balanceOf(bob);
 
         // Bob sells everything except 1
-        uint256 bobTokens = okt.balanceOf(bob);
-        vm.prank(bob); okt.sell(bobTokens - 1, 0);
+        uint256 bobTokens = wk.balanceOf(bob);
+        vm.prank(bob); wk.dispose(bobTokens - 1, 0);
 
-        // Bob tries to withdraw any remaining dividends
-        uint256 bobDivs = okt.dividendsOf(bob);
+        // Bob tries to withdraw any remaining recirculation
+        uint256 bobDivs = wk.recirculationOf(bob);
         if (bobDivs > 0) {
-            vm.prank(bob); okt.withdraw();
+            vm.prank(bob); wk.claim();
         }
 
         uint256 bobCbbtcAfter = cbbtc.balanceOf(bob);
@@ -307,20 +307,20 @@ contract OKTSecurityTest is Test {
     }
 
     function test_doubleSpend_rapidBuySellCycle() public {
-        vm.prank(alice); okt.buy(1_000_000, 0); // seed
+        vm.prank(alice); wk.acquire(1_000_000, 0); // seed
 
         uint256 attackerBefore = cbbtc.balanceOf(attacker);
 
         // Attacker tries rapid buy/sell/withdraw 20 times
         for (uint i = 0; i < 20; i++) {
-            vm.prank(attacker); okt.buy(10_000, 0);
-            uint256 bal = okt.balanceOf(attacker);
-            if (bal > 1 && okt.totalSupply() > bal) {
-                vm.prank(attacker); okt.sell(bal - 1, 0);
+            vm.prank(attacker); wk.acquire(10_000, 0);
+            uint256 bal = wk.balanceOf(attacker);
+            if (bal > 1 && wk.totalSupply() > bal) {
+                vm.prank(attacker); wk.dispose(bal - 1, 0);
             }
-            uint256 divs = okt.dividendsOf(attacker);
+            uint256 divs = wk.recirculationOf(attacker);
             if (divs > 0) {
-                vm.prank(attacker); okt.withdraw();
+                vm.prank(attacker); wk.claim();
             }
         }
 
@@ -337,43 +337,43 @@ contract OKTSecurityTest is Test {
     function test_zeroBuyReverts() public {
         vm.prank(alice);
         vm.expectRevert("Minimum 100 sats");
-        okt.buy(0, 0);
+        wk.acquire(0, 0);
     }
 
     function test_zeroSellReverts() public {
-        vm.prank(alice); okt.buy(10_000, 0);
+        vm.prank(alice); wk.acquire(10_000, 0);
         vm.prank(alice);
-        vm.expectRevert("Minimum 100 sats to sell");
-        okt.sell(0, 0);
+        vm.expectRevert("Minimum 100 sats to dispose");
+        wk.dispose(0, 0);
     }
 
     function test_sellMoreThanBalanceReverts() public {
-        vm.prank(alice); okt.buy(10_000, 0);
+        vm.prank(alice); wk.acquire(10_000, 0);
         vm.prank(alice);
         vm.expectRevert("Insufficient balance");
-        okt.sell(999_999, 0);
+        wk.dispose(999_999, 0);
     }
 
     function test_transferToZeroReverts() public {
-        vm.prank(alice); okt.buy(10_000, 0);
+        vm.prank(alice); wk.acquire(10_000, 0);
         vm.prank(alice);
         vm.expectRevert("Zero address");
-        okt.transfer(address(0), 100);
+        wk.transfer(address(0), 100);
     }
 
-    function test_withdrawWithNoDivsReverts() public {
-        vm.prank(alice); okt.buy(10_000, 0);
+    function test_claimWithNoRecirculationReverts() public {
+        vm.prank(alice); wk.acquire(10_000, 0);
         vm.prank(alice);
-        vm.expectRevert("No dividends to withdraw");
-        okt.withdraw();
+        vm.expectRevert("No recirculation to claim");
+        wk.claim();
     }
 
     function test_sellEntireSupplyReverts() public {
-        vm.prank(alice); okt.buy(10_000, 0);
-        uint256 bal = okt.balanceOf(alice);
+        vm.prank(alice); wk.acquire(10_000, 0);
+        uint256 bal = wk.balanceOf(alice);
         vm.prank(alice);
-        vm.expectRevert("Cannot sell entire supply");
-        okt.sell(bal, 0);
+        vm.expectRevert("Cannot dispose entire supply");
+        wk.dispose(bal, 0);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -381,9 +381,9 @@ contract OKTSecurityTest is Test {
     // ═══════════════════════════════════════════════════════════════════════════
 
     function test_ordinalLinkedCorrectly() public {
-        okt.inscribe(vault1, bytes32("ART-001"), 50_000, 92588651, "");
+        wk.inscribe(vault1, bytes32("ART-001"), 50_000, 92588651, "");
 
-        (uint256 ordNum, bool hasOrd, bool moved, uint256 movedAt,) = okt.vaultOrdinalStatus(vault1);
+        (uint256 ordNum, bool hasOrd, bool moved, uint256 movedAt,) = wk.vaultOrdinalStatus(vault1);
         assertEq(ordNum, 92588651);
         assertTrue(hasOrd);
         assertFalse(moved);
@@ -391,25 +391,25 @@ contract OKTSecurityTest is Test {
     }
 
     function test_ordinalMovedTriggersVaultSwept() public {
-        okt.inscribe(vault1, bytes32("ART-001"), 50_000, 92588651, "");
+        wk.inscribe(vault1, bytes32("ART-001"), 50_000, 92588651, "");
 
         // Vault should not be swept yet
-        (,bool sweptBefore,,) = okt.vaultStatus(vault1);
+        (,bool sweptBefore,,) = wk.vaultStatus(vault1);
         assertFalse(sweptBefore);
 
         // Report ordinal moved
-        okt.reportOrdinalMoved(92588651);
+        wk.reportOrdinalMoved(92588651, bytes32("btctx"));
 
         // Vault should now be marked as swept
-        (,bool sweptAfter,,) = okt.vaultStatus(vault1);
+        (,bool sweptAfter,,) = wk.vaultStatus(vault1);
         assertTrue(sweptAfter, "Ordinal movement should trigger VaultSwept");
     }
 
     function test_ordinalMovedReportsCorrectly() public {
-        okt.inscribe(vault1, bytes32("ART-001"), 50_000, 92588651, "");
-        okt.reportOrdinalMoved(92588651);
+        wk.inscribe(vault1, bytes32("ART-001"), 50_000, 92588651, "");
+        wk.reportOrdinalMoved(92588651, bytes32("btctx"));
 
-        (uint256 ordNum, bool hasOrd, bool moved, uint256 movedAt,) = okt.vaultOrdinalStatus(vault1);
+        (uint256 ordNum, bool hasOrd, bool moved, uint256 movedAt,) = wk.vaultOrdinalStatus(vault1);
         assertEq(ordNum, 92588651);
         assertTrue(hasOrd);
         assertTrue(moved);
@@ -417,18 +417,18 @@ contract OKTSecurityTest is Test {
     }
 
     function test_noOrdinalVaultWorksCorrectly() public {
-        okt.inscribe(vault1, bytes32("SERIES-001"), 50_000, 0, "");
+        wk.inscribe(vault1, bytes32("SERIES-001"), 50_000, 0, "");
 
-        (uint256 ordNum, bool hasOrd, bool moved,,) = okt.vaultOrdinalStatus(vault1);
+        (uint256 ordNum, bool hasOrd, bool moved,,) = wk.vaultOrdinalStatus(vault1);
         assertEq(ordNum, 0);
         assertFalse(hasOrd);
         assertFalse(moved);
     }
 
     function test_vaultStatusReturnsCorrectly() public {
-        okt.inscribe(vault1, bytes32("ART-001"), 50_000, 0, "");
+        wk.inscribe(vault1, bytes32("ART-001"), 50_000, 0, "");
 
-        (bool registered, bool swept, uint256 balance, bytes32 assetId) = okt.vaultStatus(vault1);
+        (bool registered, bool swept, uint256 balance, bytes32 assetId) = wk.vaultStatus(vault1);
         assertTrue(registered);
         assertFalse(swept);
         assertEq(balance, 50_000); // first vault gets fee returned
@@ -436,7 +436,7 @@ contract OKTSecurityTest is Test {
     }
 
     function test_unregisteredVaultReturnsEmpty() public {
-        (bool registered, bool swept, uint256 balance, bytes32 assetId) = okt.vaultStatus(address(0xDEAD));
+        (bool registered, bool swept, uint256 balance, bytes32 assetId) = wk.vaultStatus(address(0xDEAD));
         assertFalse(registered);
         assertFalse(swept);
         assertEq(balance, 0);
