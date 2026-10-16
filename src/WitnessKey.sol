@@ -131,7 +131,7 @@ contract WitnessKey is ReentrancyGuard {
         emit Dispose(msg.sender, tokens, net);
     }
 
-    function transfer(address to, uint256 tokens) external returns (bool) {
+    function transfer(address to, uint256 tokens) external nonReentrant returns (bool) {
         require(to != address(0),                "Zero address");
         require(tokens > 0,                      "Zero tokens");
         require(balanceOf[msg.sender] >= tokens, "Insufficient balance");
@@ -182,6 +182,7 @@ contract WitnessKey is ReentrancyGuard {
         uint256 dist   = (received * INSCRIBE_DISTRIBUTION) / 100;
         uint256 tokens = received - dist;
 
+        // Bootstrap. First Minter receives 100% of deposited cbBTC as tokens
         if (totalSupply > 0) { _distribute(dist); } else { tokens += dist; }
 
         totalSupply      += tokens;
